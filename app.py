@@ -71,10 +71,13 @@ def rewrite_m3u8(m3u8_text, query_string):
 def home():
     """হোমপেজ চেক করার জন্য"""
     server_url = get_server_url()
-    return f"<h3>✅ Cloud IPTV Server is Running!</h3><p>আপনার প্লেয়ারে এই লিংকটি দিন: <b>{server_url}playlist.m3u</b></p>"
+    return f"<h3>✅ Cloud IPTV Server is Running!</h3><p>আপনার প্লেয়ারে এই লিংকটি দিন: <b>{server_url}plusbox.m3u</b></p>"
 
 
-@app.route('/playlist.m3u')
+# ==========================================
+# আপনার কথামতো লিংক পরিবর্তন করে /plusbox.m3u করা হলো
+# ==========================================
+@app.route('/plusbox.m3u')
 def generate_full_playlist():
     """ফাইনাল প্লেলিস্ট জেনারেটর"""
     try:
@@ -106,7 +109,8 @@ def generate_full_playlist():
         return Response(
             "\n".join(new_lines), 
             mimetype="audio/x-mpegurl", 
-            headers={"Content-Disposition": "attachment; filename=playlist.m3u"}
+            # ডাউনলোডের সময় ফাইলের নামও plusbox.m3u হবে
+            headers={"Content-Disposition": "attachment; filename=plusbox.m3u"}
         )
         
     except Exception as e:
