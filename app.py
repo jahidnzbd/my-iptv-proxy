@@ -4,15 +4,10 @@ from flask import Flask, Response, request
 
 app = Flask(__name__)
 
-# আপনার আইপি 
-MY_IP = "192.168.31.109"
-PORT = "5000"
-SERVER_URL = f"http://{MY_IP}:{PORT}/"
-
 BASE_HOST = "https://backend.plusbox.tv"
 TOKEN_API = "https://plusbox.tv/token.php"
 
-# আপনার দেওয়া গিটহাব প্লেলিস্ট লিংক
+# GitHub থেকে অটোমেটিক আপডেট হওয়া প্লেলিস্ট
 GITHUB_URL = "https://raw.githubusercontent.com/sm-monirulislam/SM-Live-TV/main/CloudTV.m3u"
 
 HEADERS = {
@@ -22,7 +17,16 @@ HEADERS = {
     "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+def get_server_url():
+    """ক্লাউড সার্ভারের জন্য ডাইনামিক এবং সিকিউর (HTTPS) URL তৈরি করা"""
+    url = request.host_url
+    # Render.com-এ হোস্ট করলে যাতে লিংকটি সব সময় https:// থাকে
+    if "onrender.com" in url and url.startswith("http://"):
+        url = url.replace("http://", "https://")
+    return url
+
 def get_live_token(ch_name):
+    """Plusbox থেকে ফ্রেশ টোকেন নিয়ে আসা"""
     try:
         payload = {"ch_name": ch_name}
         resp = requests.post(TOKEN_API, data=payload, headers=HEADERS, timeout=5)
@@ -35,6 +39,7 @@ def get_live_token(ch_name):
     return None
 
 def rewrite_m3u8(m3u8_text, query_string):
+    """প্লেলিস্টের ভেতরের ভিডিও খণ্ডগুলোতে টোকেন ইনজেক্ট করা"""
     if not query_string:
         return m3u8_text
         
@@ -62,47 +67,42 @@ def rewrite_m3u8(m3u8_text, query_string):
     return "\n".join(new_lines)
 
 
+@app.route('/')
+def home():
+    """হোমপেজ চেক করার জন্য"""
+    server_url = get_server_url()
+    return f"<h3>✅ Cloud IPTV Server is Running!</h3><p>আপনার প্লেয়ারে এই লিংকটি দিন: <b>{server_url}playlist.m3u</b></p>"
+
+
 @app.route('/playlist.m3u')
 def generate_full_playlist():
-    print("\n[+] GitHub থেকে সম্পূর্ণ প্লেলিস্ট ডাউনলোড করা হচ্ছে...")
+    """ফাইনাল প্লেলিস্ট জেনারেটর"""
     try:
-        # GitHub থেকে লেটেস্ট লিস্ট আনা
         resp = requests.get(GITHUB_URL, headers={"User-Agent": "Mozilla/5.0"})
         lines = resp.text.splitlines()
         
+        server_url = get_server_url()
         new_lines = []
-        channel_count = 0
         
         for line in lines:
             line = line.strip()
-            
-            # যদি লাইনটি স্ট্রিম লিংক হয়
             if line.startswith("http"):
-                # যদি এটি Plusbox এর চ্যানেল হয়, তবে আমাদের প্রক্সি সার্ভারে পাঠাবো
+                # Plusbox-এর লিংক হলে আমাদের সার্ভারের লিংক দিয়ে রিপ্লেস করবে
                 if "backend.plusbox.tv" in line:
                     parts = line.split('/')
                     if len(parts) > 3:
                         ch_name = parts[3]
-                        ch_name = ch_name.split('?')[0] # টোকেন বা এক্সট্রা কিছু থাকলে বাদ দেওয়া
+                        ch_name = ch_name.split('?')[0] 
                         
-                        # আপনার আইপি দিয়ে লোকাল লিংক তৈরি
-                        local_url = f"{SERVER_URL}live/{ch_name}/index.m3u8"
+                        local_url = f"{server_url}live/{ch_name}/index.m3u8"
                         new_lines.append(local_url)
-                        channel_count += 1
                     else:
                         new_lines.append(line)
-                        channel_count += 1
-                # যদি অন্য কোনো সার্ভারের লিংক হয়, তবে সরাসরি সেটাই দিয়ে দিবো
                 else:
                     new_lines.append(line)
-                    channel_count += 1
             else:
-                # #EXTINF (চ্যানেলের নাম, লোগো) ইত্যাদি ঠিক রাখা
                 new_lines.append(line)
                 
-        print(f"[+] সফলভাবে {channel_count} টি চ্যানেলের লিস্ট তৈরি হয়েছে!")
-        
-        # ফাইলটি যেন ডাউনলোড হয় এবং প্লেয়ার বুঝতে পারে, তার জন্য সঠিক হেডার
         return Response(
             "\n".join(new_lines), 
             mimetype="audio/x-mpegurl", 
@@ -110,20 +110,16 @@ def generate_full_playlist():
         )
         
     except Exception as e:
-        print(f"[-] Error loading playlist: {str(e)}")
         return f"Error loading playlist: {str(e)}", 500
 
 
 @app.route('/live/<ch_name>/index.m3u8')
 def master_playlist(ch_name):
-    print(f"\n[>] চ্যানেল রিকোয়েস্ট: {ch_name}")
-    
+    """অরিজিনাল চ্যানেল থেকে ডেটা টেনে প্রক্সি করা"""
     token = get_live_token(ch_name)
     if not token:
-        print(f"[-] টোকেন পাওয়া যায়নি! চ্যানেল: {ch_name}")
         return "Auth Failed - Token not found", 403
 
-    print(f"[+] টোকেন পাওয়া গেছে: {token[:10]}...")
     remote_url = f"{BASE_HOST}/{ch_name}/index.m3u8?token={token}"
 
     try:
@@ -138,12 +134,12 @@ def master_playlist(ch_name):
         return Response(modified_m3u8, mimetype="application/vnd.apple.mpegurl")
 
     except Exception as e:
-        print(f"[-] Error: {e}")
         return f"Error: {e}", 500
 
 
 @app.route('/live/<ch_name>/<path:file_path>')
 def dynamic_handler(ch_name, file_path):
+    """ভিডিও সেগমেন্ট (.ts) প্রক্সি এবং বাফারিং হ্যান্ডলার"""
     query_string = request.query_string.decode("utf-8")
     remote_url = f"{BASE_HOST}/{ch_name}/{file_path}"
     
@@ -162,13 +158,11 @@ def dynamic_handler(ch_name, file_path):
         
         else:
             content_type = r.headers.get('Content-Type', 'video/mp2t')
-            return Response(r.iter_content(chunk_size=1024 * 512), content_type=content_type)
+            # বাফারিং কমানোর জন্য চাংক সাইজ 1MB করা হয়েছে
+            return Response(r.iter_content(chunk_size=1024 * 1024), content_type=content_type)
 
     except Exception as e:
-        print(f"[-] Segment Error: {e}")
         return "Segment Error", 500
 
 if __name__ == '__main__':
-    print("🚀 Auto-Token Server is Running with Full GitHub Playlist!")
-    print(f"📺 আপনার প্লেয়ারে এই লিংকটি দিন: http://{MY_IP}:5000/playlist.m3u")
     app.run(host='0.0.0.0', port=5000)
